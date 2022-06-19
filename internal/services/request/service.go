@@ -29,6 +29,7 @@ func (s *service) CollectData(ctx context.Context, urls []string) ([]*Response, 
 
 	responseList := make([]*Response, 0, len(urls))
 	chunk := make([]string, 0, s.maxWorkers)
+	resChan := make(chan *result, s.maxWorkers)
 	for i := 0; i < len(urls)/s.maxWorkers+1; i++ {
 		//divide urls to chunks by s.maxWorkers
 		wg := &sync.WaitGroup{}
@@ -38,7 +39,7 @@ func (s *service) CollectData(ctx context.Context, urls []string) ([]*Response, 
 			end = i*s.maxWorkers + len(urls)%s.maxWorkers
 		}
 		chunk = urls[start:end]
-		resChan := make(chan *result, s.maxWorkers)
+
 		//run s.maxWorkers to do requests
 		for _, url := range chunk {
 			wg.Add(1)
@@ -46,7 +47,7 @@ func (s *service) CollectData(ctx context.Context, urls []string) ([]*Response, 
 		}
 		//waiting until processing of requests end
 		wg.Wait()
-		for j := 0; j < len(resChan); j++ {
+		for j := 0; j < len(chunk); j++ {
 			res := <-resChan
 			//end of processing whole req if one err
 			if res.Err != nil {
@@ -55,6 +56,7 @@ func (s *service) CollectData(ctx context.Context, urls []string) ([]*Response, 
 			responseList = append(responseList, res.Response)
 		}
 	}
+	close(resChan)
 	return responseList, nil
 }
 

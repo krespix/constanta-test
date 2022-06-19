@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	reqs "github.com/krespix/constanta-test/internal/services/request"
 )
@@ -14,25 +16,40 @@ type Server interface {
 	Start(ctx context.Context) error
 }
 type server struct {
-	reqService reqs.Service
-
-	addr        string
+	reqService  reqs.Service
 	maxRequests int
 
-	mux *http.ServeMux
+	srv    *http.Server
+	router *http.ServeMux
 
 	//requests in process counter
 	mu            *sync.Mutex
 	reqsInProcess int
 }
 
-func (s *server) Start(ctx context.Context) error {
+func (s *server) Start(ctx context.Context) (err error) {
 	s.configure(ctx)
-	return http.ListenAndServe(s.addr, s.limit(s.mux))
+	go func() {
+		if err = s.srv.ListenAndServe(); err != nil {
+			log.Fatalf("failed to serve: %v", err)
+		}
+	}()
+	<-ctx.Done()
+	ctxShutDown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer func() {
+		cancel()
+	}()
+	if err = s.srv.Shutdown(ctxShutDown); err != nil {
+		log.Println("server shutdown failed: ", err)
+	}
+	if err == http.ErrServerClosed {
+		err = nil
+	}
+	return nil
 }
 
 func (s *server) configure(ctx context.Context) {
-	s.mux.HandleFunc("/v1/collect-data", s.collectData(ctx))
+	s.router.HandleFunc("/v1/collect-data", s.collectData(ctx))
 }
 
 func (s *server) collectData(ctx context.Context) http.HandlerFunc {
@@ -104,10 +121,14 @@ func (s *server) incReqsCounter() {
 }
 
 func New(addr string, reqService reqs.Service, maxRequests int) *server {
+	router := http.NewServeMux()
 	return &server{
-		addr:        addr,
-		reqService:  reqService,
-		mux:         http.NewServeMux(),
+		reqService: reqService,
+		srv: &http.Server{
+			Addr:    addr,
+			Handler: router,
+		},
+		router:      router,
 		maxRequests: maxRequests,
 		mu:          &sync.Mutex{},
 	}
